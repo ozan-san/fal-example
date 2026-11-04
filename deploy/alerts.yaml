@@ -1,0 +1,48 @@
+# SLO: 99% of fal requests succeed. Error budget = 1%.
+# Budget-cap rejections are excluded: they are this app's choice, not a fal failure.
+groups:
+  - name: fal-slo-recording
+    rules:
+      - record: fal:error_ratio:rate5m
+        expr: |
+          sum by (fal_mode) (rate(fal_client_requests_total{outcome="failure"}[5m]))
+          / sum by (fal_mode) (rate(fal_client_requests_total{outcome=~"success|failure"}[5m]))
+      - record: fal:error_ratio:rate1h
+        expr: |
+          sum by (fal_mode) (rate(fal_client_requests_total{outcome="failure"}[1h]))
+          / sum by (fal_mode) (rate(fal_client_requests_total{outcome=~"success|failure"}[1h]))
+
+  - name: fal-alerts
+    rules:
+      # Fast burn: at 14.4x, 2% of a 30-day budget is gone in an hour.
+      # The 5m window lets the alert clear soon after recovery.
+      - alert: FalErrorBudgetFastBurn
+        expr: fal:error_ratio:rate1h > (14.4 * 0.01) and fal:error_ratio:rate5m > (14.4 * 0.01)
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "fal error rate is burning the 99% SLO budget at over 14.4x"
+      - alert: FalQueueWaitHigh
+        expr: |
+          histogram_quantile(0.95, sum by (le, fal_mode) (
+            rate(fal_client_queue_duration_seconds_bucket[10m])
+          )) > 30
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "p95 fal queue wait is above 30s"
+      - alert: FalRequestBudgetLow
+        expr: fal_client_budget_remaining < 10
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Fewer than 10 live fal requests left before the hard cap"
+      - alert: TelemetryPipelineDown
+        expr: up{job="app-metrics"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Prometheus cannot scrape metrics from the OTel Collector"

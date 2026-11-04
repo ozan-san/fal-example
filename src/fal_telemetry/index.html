@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fal telemetry demo</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --surface: #fcfcfb; --panel: #f3f2ef; --border: #dddcd6;
+    --text: #0b0b0b; --muted: #52514e;
+    --accent: #2a78d6; --accent-text: #ffffff;
+    --queue: #eb6834; --inference: #2a78d6; --other: #1baf7a;
+    --error-bg: #fbeaea; --error-text: #9c1f1f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface: #1a1a19; --panel: #242423; --border: #3a3a38;
+      --text: #f0efec; --muted: #c3c2b7;
+      --accent: #3987e5; --accent-text: #ffffff;
+      --queue: #d95926; --inference: #3987e5; --other: #199e70;
+      --error-bg: #3a1f1f; --error-text: #f4b6b6;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--surface); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 16px 64px; }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 24px; margin: 0; }
+  a { color: var(--accent); }
+  .sub { color: var(--muted); margin: 4px 0 24px; }
+  .status { color: var(--muted); font-size: 14px; }
+  .status strong { color: var(--text); }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  textarea {
+    width: 100%; padding: 10px 12px; font: inherit; color: var(--text);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; resize: vertical;
+  }
+  .actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+  button {
+    padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: var(--accent-text); border: 0; border-radius: 8px;
+  }
+  button:disabled { opacity: .55; cursor: wait; }
+  .hint { color: var(--muted); font-size: 14px; }
+  .error {
+    margin-top: 20px; padding: 12px 14px; border-radius: 8px;
+    background: var(--error-bg); color: var(--error-text);
+  }
+  .result { margin-top: 28px; padding: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+  .result img { display: block; width: 100%; max-width: 512px; height: auto; margin: 0 auto 16px; border-radius: 8px; }
+  .placeholder {
+    max-width: 512px; margin: 0 auto 16px; padding: 48px 16px; text-align: center;
+    color: var(--muted); border: 1px dashed var(--border); border-radius: 8px;
+  }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  .bar { display: flex; gap: 2px; height: 16px; }
+  .bar span { display: block; min-width: 2px; }
+  .bar span:first-child { border-radius: 4px 0 0 4px; }
+  .bar span:last-child { border-radius: 0 4px 4px 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 10px 0 0; padding: 0; list-style: none; font-size: 14px; color: var(--muted); }
+  .legend i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2px; }
+  .legend b { color: var(--text); font-weight: 600; }
+  .meta { margin-top: 14px; font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>fal telemetry demo</h1>
+    <div class="status" id="status">Checking…</div>
+  </header>
+  <p class="sub">Generate an image, see where the time went, then follow the same request into
+    <a id="dash-link" target="_blank" rel="noopener">Grafana</a>.</p>
+
+  <form id="form">
+    <label for="prompt">Prompt</label>
+    <textarea id="prompt" rows="2" maxlength="500" required>a red bicycle leaning on a blue wall</textarea>
+    <div class="actions">
+      <button id="go" type="submit">Generate</button>
+      <span class="hint" id="hint"></span>
+    </div>
+  </form>
+
+  <div class="error" id="error" role="alert" hidden></div>
+
+  <section class="result" id="result" aria-live="polite" hidden>
+    <img id="image" alt="Generated image" hidden>
+    <div class="placeholder" id="placeholder" hidden>Mock mode: no real image was generated.</div>
+    <h2>Where the time went</h2>
+    <div class="bar" id="bar" role="img"></div>
+    <ul class="legend" id="legend"></ul>
+    <p class="meta" id="meta"></p>
+  </section>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const grafana = `http://${location.hostname}:3000`;
+  $("dash-link").href = `${grafana}/d/fal-overview`;
+
+  function traceUrl(traceId) {
+    const panes = { a: {
+      datasource: "tempo",
+      queries: [{ refId: "A", datasource: { type: "tempo", uid: "tempo" }, queryType: "traceql", query: traceId }],
+      range: { from: "now-1h", to: "now" },
+    } };
+    return `${grafana}/explore?schemaVersion=1&orgId=1&panes=${encodeURIComponent(JSON.stringify(panes))}`;
+  }
+
+  let mode = null;
+  async function refreshStatus() {
+    try {
+      const health = await (await fetch("/health")).json();
+      mode = health.mode;
+      const left = health.budget_remaining;
+      $("status").innerHTML = "";
+      const strong = document.createElement("strong");
+      strong.textContent = mode === "live" ? "Live" : "Mock";
+      $("status").append(strong, mode === "live" ? ` · ${left} requests left` : " · no credit used");
+      $("hint").textContent = mode === "live"
+        ? `Each click spends about $0.003 of fal credit (${health.endpoint}).`
+        : "Simulated responses, free.";
+      $("go").disabled = mode === "live" && left === 0;
+    } catch {
+      $("status").textContent = "API unreachable";
+    }
+  }
+
+  function renderTimings(r) {
+    const inference = r.inference_seconds ?? 0;
+    const other = Math.max(0, r.total_seconds - r.queue_seconds - inference);
+    const parts = [
+      ["Queue wait", r.queue_seconds, "--queue"],
+      ["Inference", inference, "--inference"],
+      ["Everything else", other, "--other"],
+    ];
+    $("bar").replaceChildren(...parts.filter(([, s]) => s > 0).map(([label, s, color]) => {
+      const seg = document.createElement("span");
+      seg.style.flexGrow = s;
+      seg.style.background = `var(${color})`;
+      seg.title = `${label}: ${s.toFixed(2)}s`;
+      return seg;
+    }));
+    $("bar").setAttribute("aria-label", parts.map(([l, s]) => `${l} ${s.toFixed(2)} seconds`).join(", "));
+    $("legend").replaceChildren(...parts.map(([label, s, color]) => {
+      const li = document.createElement("li");
+      const swatch = document.createElement("i");
+      swatch.style.background = `var(${color})`;
+      const value = document.createElement("b");
+      value.textContent = `${s.toFixed(2)}s`;
+      li.append(swatch, `${label} `, value);
+      return li;
+    }));
+  }
+
+  function render(r) {
+    const url = r.image_urls[0];
+    const real = url && url.startsWith("https://") && mode === "live";
+    $("image").hidden = !real;
+    $("placeholder").hidden = real;
+    if (real) $("image").src = url;
+    renderTimings(r);
+
+    const link = document.createElement("a");
+    link.href = traceUrl(r.trace_id);
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = "View trace";
+    $("meta").replaceChildren(
+      `Total ${r.total_seconds.toFixed(2)}s · estimated cost $${r.estimated_cost_usd.toFixed(3)} · request ${r.request_id} · `,
+      link,
+      " (ready a few seconds after the request finishes)",
+    );
+    $("result").hidden = false;
+  }
+
+  $("form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    $("go").disabled = true;
+    $("go").textContent = "Generating…";
+    $("error").hidden = true;
+    try {
+      const response = await fetch("/generate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: $("prompt").value }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        const detail = typeof body.detail === "string" ? body.detail : "invalid request";
+        throw new Error(`Request failed (${response.status}): ${detail}`);
+      }
+      render(body);
+    } catch (err) {
+      $("error").textContent = err.message;
+      $("error").hidden = false;
+    } finally {
+      $("go").textContent = "Generate";
+      $("go").disabled = false;
+      refreshStatus();
+    }
+  });
+
+  refreshStatus();
+</script>
+</body>
+</html>
