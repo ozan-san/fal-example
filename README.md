@@ -16,6 +16,27 @@ instead of reporting one latency number.
                          ──> Loki       (logs)                 ─┘
 ```
 
+## Screenshots
+
+**Grafana dashboard.** Real fal traffic in live mode: health, time per stage, failures, and links
+into traces and logs. Inference p95 jumps to about 7s for a short stretch while queue wait stays
+low, which a single latency number would hide.
+
+![Grafana dashboard in live mode showing success rate, queue wait, inference time and failures by type](screenshots/grafana.png)
+
+**Web UI.** A real image from a live fal call, with the time split into queue wait, inference and
+everything else.
+
+<img src="screenshots/inference-ui.png" alt="Web UI showing a generated image of the ruins of Ephesus and a timing breakdown" width="480">
+
+**Prometheus alert rules.** All four rules loaded, none firing.
+
+![Prometheus alerts page listing four inactive fal alert rules](screenshots/prometheus-alerts.png)
+
+**Prometheus scrape targets.** App metrics and the Collector's own metrics are both up.
+
+![Prometheus target health page with both scrape targets up](screenshots/prometheus-sys-health.png)
+
 ## Quick start
 
 Needs Docker, plus [uv](https://docs.astral.sh/uv/) to run the tests. The default mode is `mock`,
