@@ -27,7 +27,7 @@ low, which a single latency number would hide.
 **Web UI.** A real image from a live fal call, with the time split into queue wait, inference and
 everything else.
 
-<img src="screenshots/inference-ui.png" alt="Web UI showing a generated image of Isa Khan's Tomb and a timing breakdown" width="480">
+<img src="screenshots/web-ui.png" alt="Web UI showing a generated image of Isa Khan's Tomb and a timing breakdown" width="480">
 
 **Prometheus alert rules.** All four rules loaded, none firing.
 
